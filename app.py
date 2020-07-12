@@ -70,7 +70,7 @@ def CreatePaperTraderUser(username,last_name):
 
 @app.route('/test/{name}')
 def testQueryParam(name):
-
+    name = 'dingus '+name
     return {'Name': name}
 
 @app.route('/optionChain')
