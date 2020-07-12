@@ -6,7 +6,6 @@ from chalicelib import config
 import requests
 import json
 
-#from chalicelib import db
 app = Chalice(app_name='PaperTrader')
 
 @app.route('/initUserTable')
@@ -47,8 +46,8 @@ def CreatePaperTraderUserTable():
 
     return {'Status': 'OK'}
 
-@app.route('/initUser/{username}/{last_name}')
-def CreatePaperTraderUser(username,last_name):
+@app.route('/initUser/{username}/{last_name}/{account_balance}')
+def CreatePaperTraderUser(username,last_name, account_balance):
 
     date = datetime.date.today()
     dateString = date.strftime("%Y-%m-%d")
@@ -59,7 +58,7 @@ def CreatePaperTraderUser(username,last_name):
         Item={
             'username': username,
             'last_name': last_name,
-            'AccountBalance': 1000,
+            'AccountBalance': account_balance,
             'TradesRemaining': 5,
             'Date': dateString,
             'Profit': 0,
@@ -68,10 +67,13 @@ def CreatePaperTraderUser(username,last_name):
     )
     return {'Status': 'OK'}
 
-@app.route('/test/{name}')
-def testQueryParam(name):
-    name = 'dingus '+name
-    return {'Name': name}
+@app.route('/test/{firstName}/{lastName}')
+def testQueryParam(firstName,lastName):
+    if firstName == 'von' or firstName == 'vic':
+        fullName = 'dingus ' + firstName + ' ' + lastName
+        return{'fullName': fullName}
+    
+    return {'error': 'ur name sucks, try again'}
 
 @app.route('/optionChain')
 def optionChain():
@@ -86,8 +88,12 @@ def optionChain():
         headers= optionHeaders
     )
     json_response = response.json()
+    print(json_response.option)
+
+    #chain = [option for option in json_response if option['strike'] == '382.5']
+    #print [obj for obj in json_response if(obj['strike'] == '540.0')]
     print(response.status_code)
-    print(json_response)
+    #print(json.dumps(chain, indent=4))
     return {'Status': 'OK'}
 
 @app.route('/restTest')
