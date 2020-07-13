@@ -9,6 +9,11 @@ from Contract import Contract
 
 app = Chalice(app_name='PaperTrader')
 
+def getClosestFriday():
+    today = datetime.date.today()
+    friday = today + datetime.timedelta( (4-today.weekday()) % 7 )
+    fridayDateString = friday.strftime("%Y-%m-%d")
+    return fridayDateString
 
 def sortByStrikePrice(nested_dict, stockPrice, optionType, listOfContracts):
     for key, value in nested_dict.items():
@@ -95,33 +100,56 @@ def testQueryParam(firstName,lastName):
     
     return {'error': 'ur name sucks, try again'}
 
-@app.route('/optionChain')
+@app.route('/longCall', methods=['POST'])
 def optionChain():
+    status = None
+    webhook_message = app.current_request.json_body
+    print(app.current_request.json_body)
 
-    url = '{}markets/options/chains'.format(config.API_BASE_URL)
-    optionHeaders = {
-        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
-        'Accept': 'application/json'
-    }
-    response = requests.get(url,
-        params={'symbol': 'AAPL', 'expiration': '2020-07-17'},
-        headers= optionHeaders
-    )
-    json_response = response.json()
-    print(json_response)
-    contractList = []
-    #sortByStrikePrice(json_response, 385, 'call', contractList)
-    sortByStrikePrice(json_response, 385, 'call', contractList)
-    contractToPurchase = contractList[0]
-    print('\n')
-    print('\n')
-    print('CONTRACT TO PURCHASE \n')
-    contractToPurchase.toString()
-    print('\n')
-    print('\n')
-    
+    if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
+        properFormatting = True
+    else:
+        properFormatting = False
+
+    if (properFormatting == True):
+        if webhook_message['secretKey'] == config.SECRET_KEY:
+    #make call to get option chains for given security at current price
+            try:
+                url = '{}markets/options/chains'.format(config.API_BASE_URL)
+                optionHeaders = {
+                    'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
+                    'Accept': 'application/json'
+                }
+                response = requests.get(url,
+                    params={'symbol': webhook_message['symbol'], 'expiration': getClosestFriday()},
+                    headers= optionHeaders
+                )
+    #receive option data
+                json_response = response.json()
+                print(json_response)
+                if json_response['options'] != None: 
+                    contractList = []
+
+    #find At the Money(ATM) or closest In the Money(ITM) option contract
+                    sortByStrikePrice(json_response, webhook_message['stockPrice'], 'call', contractList)
+                    contractToPurchase = contractList[0]
+                    print('\n')
+                    print('\n')
+                    print('CONTRACT TO PURCHASE \n')
+                    contractToPurchase.toString()
+                    print('\n')
+                    print('\n')
+                    status = "200 OK"
+                else:
+                    status = "400 Bad Request Company Symbol Not Found"
+            except requests.exceptions.RequestException as e:
+                raise SystemExit(e)
+        else:
+            status = "401 Incorrect Secret Key"
+    else:
+        status = "400 Bad Request"
   
-    return {'Status': 'OK'}
+    return {'Status': status}
 
 @app.route('/restTest')
 def restTest():
@@ -140,4 +168,3 @@ def restTest():
     print(response.status_code)
     print(json_response)
     return {'Status': 'OK'}
-
