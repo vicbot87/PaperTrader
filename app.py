@@ -5,8 +5,28 @@ import datetime
 from chalicelib import config
 import requests
 import json
+from Contract import Contract
 
 app = Chalice(app_name='PaperTrader')
+
+
+def sortByStrikePrice(nested_dict, stockPrice, optionType, listOfContracts):
+    for key, value in nested_dict.items():
+        numElem = 0
+        if type(value) is dict:
+            sortByStrikePrice(value, stockPrice, optionType, listOfContracts)
+        else:
+            for i in range(len(value)):
+                if (value[i])['strike'] <= stockPrice and (value[i])['option_type'] == optionType and (value[i])['contract_size'] == 100:
+                    if numElem > 0:
+                        if (value[i])['strike'] > listOfContracts[numElem-1].strikePrice:
+                            contract = Contract((value[i])['symbol'], (value[i])['bid'], (value[i])['ask'],(value[i])['strike'], (value[i])['expiration_date'])
+                            listOfContracts.pop()
+                            listOfContracts.append(contract)
+                    else:
+                        contract = Contract((value[i])['symbol'], (value[i])['bid'], (value[i])['ask'],(value[i])['strike'], (value[i])['expiration_date'])
+                        listOfContracts.append(contract)
+                        numElem += 1
 
 @app.route('/initUserTable')
 def CreatePaperTraderUserTable():
@@ -88,12 +108,19 @@ def optionChain():
         headers= optionHeaders
     )
     json_response = response.json()
-    print(json_response.option)
-
-    #chain = [option for option in json_response if option['strike'] == '382.5']
-    #print [obj for obj in json_response if(obj['strike'] == '540.0')]
-    print(response.status_code)
-    #print(json.dumps(chain, indent=4))
+    print(json_response)
+    contractList = []
+    #sortByStrikePrice(json_response, 385, 'call', contractList)
+    sortByStrikePrice(json_response, 385, 'call', contractList)
+    contractToPurchase = contractList[0]
+    print('\n')
+    print('\n')
+    print('CONTRACT TO PURCHASE \n')
+    contractToPurchase.toString()
+    print('\n')
+    print('\n')
+    
+  
     return {'Status': 'OK'}
 
 @app.route('/restTest')
@@ -114,22 +141,3 @@ def restTest():
     print(json_response)
     return {'Status': 'OK'}
 
-# The view function above will return {"hello": "world"}
-# whenever you make an HTTP GET request to '/'.
-#
-# Here are a few more examples:
-#
-# @app.route('/hello/{name}')
-# def hello_name(name):
-#    # '/hello/james' -> {"hello": "james"}
-#    return {'hello': name}
-#
-# @app.route('/users', methods=['POST'])
-# def create_user():
-#     # This is the JSON body the user sent in their POST request.
-#     user_as_json = app.current_request.json_body
-#     # We'll echo the json body back to the user in a 'user' key.
-#     return {'user': user_as_json}
-#
-# See the README documentation for more examples.
-#
