@@ -6,33 +6,12 @@ from chalicelib import config
 import requests
 import json
 from Contract import Contract
+from tradeHelper import tradeHelper
+from decimal import Decimal
 
 app = Chalice(app_name='PaperTrader')
 
-def getClosestFriday():
-    today = datetime.date.today()
-    friday = today + datetime.timedelta( (4-today.weekday()) % 7 )
-    fridayDateString = friday.strftime("%Y-%m-%d")
-    return fridayDateString
-
-def sortByStrikePrice(nested_dict, stockPrice, optionType, listOfContracts):
-    for key, value in nested_dict.items():
-        numElem = 0
-        if type(value) is dict:
-            sortByStrikePrice(value, stockPrice, optionType, listOfContracts)
-        else:
-            for i in range(len(value)):
-                if (value[i])['strike'] <= stockPrice and (value[i])['option_type'] == optionType and (value[i])['contract_size'] == 100:
-                    if numElem > 0:
-                        if (value[i])['strike'] > listOfContracts[numElem-1].strikePrice:
-                            contract = Contract((value[i])['symbol'], (value[i])['bid'], (value[i])['ask'],(value[i])['strike'], (value[i])['expiration_date'])
-                            listOfContracts.pop()
-                            listOfContracts.append(contract)
-                    else:
-                        contract = Contract((value[i])['symbol'], (value[i])['bid'], (value[i])['ask'],(value[i])['strike'], (value[i])['expiration_date'])
-                        listOfContracts.append(contract)
-                        numElem += 1
-
+### CREATE A TABLE TO STORE USERS
 @app.route('/initUserTable')
 def CreatePaperTraderUserTable():
     dynamodb = boto3.resource('dynamodb')
@@ -65,12 +44,48 @@ def CreatePaperTraderUserTable():
         'WriteCapacityUnits': 5
         }
     )
-
 # Wait until the table exists.
     table.meta.client.get_waiter('table_exists').wait(TableName='PaperTraderUserTable')
-
     return {'Status': 'OK'}
 
+###CREATE A TABLE TO STORE OPTION CONTRACTS
+@app.route('/initContractTable')
+def CreatePaperTraderUserTable():
+    dynamodb = boto3.resource('dynamodb')
+    # Create the DynamoDB table.
+    table = dynamodb.create_table(
+        TableName='PaperTraderContractTable',
+        KeySchema=[
+            {
+                'AttributeName': 'username',
+                'KeyType': 'HASH'
+            },
+            {
+                'AttributeName': 'contract_symbol',
+                'KeyType': 'RANGE'
+            },
+      
+        ],
+        AttributeDefinitions=[
+            {
+                'AttributeName': 'username',
+                'AttributeType': 'S'
+            },
+            {
+                'AttributeName': 'contract_symbol',
+                'AttributeType': 'S'
+            },
+        ],
+        ProvisionedThroughput={
+        'ReadCapacityUnits': 5,
+        'WriteCapacityUnits': 5
+        }
+    )
+# Wait until the table exists.
+    table.meta.client.get_waiter('table_exists').wait(TableName='PaperTraderUserTable')
+    return {'Status': 'OK'} 
+
+### A ROUTE METHOD TO ADD USERS TO THE USER TABLE
 @app.route('/initUser/{username}/{last_name}/{account_balance}')
 def CreatePaperTraderUser(username,last_name, account_balance):
 
@@ -100,11 +115,13 @@ def testQueryParam(firstName,lastName):
     
     return {'error': 'ur name sucks, try again'}
 
+### A ROUTE METHOD MADE TO RECEIVE A JSON POST FROM TRADING
+### FINDS CLOSEST AT THE MONEY CONTRACT
+### ADDS CONTRACT TO CONTRACT TABLE FOR EACH USER
 @app.route('/longCall', methods=['POST'])
 def optionChain():
     status = None
     webhook_message = app.current_request.json_body
-    print(app.current_request.json_body)
 
     if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
         properFormatting = True
@@ -121,24 +138,19 @@ def optionChain():
                     'Accept': 'application/json'
                 }
                 response = requests.get(url,
-                    params={'symbol': webhook_message['symbol'], 'expiration': getClosestFriday()},
+                    params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
                     headers= optionHeaders
                 )
     #receive option data
                 json_response = response.json()
-                print(json_response)
                 if json_response['options'] != None: 
                     contractList = []
 
     #find At the Money(ATM) or closest In the Money(ITM) option contract
-                    sortByStrikePrice(json_response, webhook_message['stockPrice'], 'call', contractList)
+                    tradeHelper.sortByStrikePrice(json_response, webhook_message['stockPrice'], 'call', contractList)
                     contractToPurchase = contractList[0]
-                    print('\n')
-                    print('\n')
-                    print('CONTRACT TO PURCHASE \n')
-                    contractToPurchase.toString()
-                    print('\n')
-                    print('\n')
+                    contractToPurchase.strikePrice = Decimal(contractToPurchase.strikePrice)
+                    tradeHelper.insertContractsToTable(contractToPurchase)
                     status = "200 OK"
                 else:
                     status = "400 Bad Request Company Symbol Not Found"
@@ -168,3 +180,8 @@ def restTest():
     print(response.status_code)
     print(json_response)
     return {'Status': 'OK'}
+
+def printUsers(Users):
+    for User in Users:
+        print(User['username'], " ",  User['last_name'])
+
