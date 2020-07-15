@@ -1,13 +1,24 @@
 from chalice import Chalice
 import boto3
 import os
-import datetime
+from datetime import datetime
 from chalicelib import config
 import requests
 import json
 from Contract import Contract
 from tradeHelper import tradeHelper
 from decimal import Decimal
+from pytz import timezone
+
+def tradingHours():
+    est = timezone('US/Eastern')
+    timeUnformatted = datetime.now(est)
+    timeFormatted = timeUnformatted.strftime("%H:%M:%S")
+    #Assuming it takes ~two seconds for trade to process
+    if(timeFormatted >= '09:00:00' and timeFormatted <= '16:29:58'):
+        return True
+    else:
+        return False
 
 app = Chalice(app_name='PaperTrader')
 
@@ -98,90 +109,127 @@ def CreatePaperTraderUser(username,last_name, account_balance):
         Item={
             'username': username,
             'last_name': last_name,
-            'AccountBalance': account_balance,
+            'FullAccountBalance': account_balance,
+            'AvailableAccountBalance': account_balance,
             'TradesRemaining': 5,
             'Date': dateString,
             'Profit': 0,
-            'TotalTrades': 0
+            'TotalOrdersPurchased': 0
         }
     )
     return {'Status': 'OK'}
 
-@app.route('/test/{firstName}/{lastName}')
-def testQueryParam(firstName,lastName):
-    if firstName == 'von' or firstName == 'vic':
-        fullName = 'dingus ' + firstName + ' ' + lastName
-        return{'fullName': fullName}
-    
-    return {'error': 'ur name sucks, try again'}
 
 ### A ROUTE METHOD MADE TO RECEIVE A JSON POST FROM TRADING
 ### FINDS CLOSEST AT THE MONEY CONTRACT
 ### ADDS CONTRACT TO CONTRACT TABLE FOR EACH USER
-@app.route('/longCall', methods=['POST'])
-def optionChain():
+@app.route('/longCallBuy', methods=['POST'])
+def optionBuy():
     status = None
     webhook_message = app.current_request.json_body
-
-    if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
-        properFormatting = True
-    else:
-        properFormatting = False
-
-    if (properFormatting == True):
-        if webhook_message['secretKey'] == config.SECRET_KEY:
-    #make call to get option chains for given security at current price
-            try:
-                url = '{}markets/options/chains'.format(config.API_BASE_URL)
-                optionHeaders = {
-                    'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
-                    'Accept': 'application/json'
-                }
-                response = requests.get(url,
-                    params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
-                    headers= optionHeaders
-                )
-    #receive option data
-                json_response = response.json()
-                if json_response['options'] != None: 
-                    contractList = []
-
-    #find At the Money(ATM) or closest In the Money(ITM) option contract
-                    tradeHelper.sortByStrikePrice(json_response, webhook_message['stockPrice'], 'call', contractList)
-                    contractToPurchase = contractList[0]
-                    contractToPurchase.strikePrice = Decimal(contractToPurchase.strikePrice)
-                    tradeHelper.insertContractsToTable(contractToPurchase)
-                    status = "200 OK"
-                else:
-                    status = "400 Bad Request Company Symbol Not Found"
-            except requests.exceptions.RequestException as e:
-                raise SystemExit(e)
+    if tradingHours() == True:
+        if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
+            properFormatting = True
         else:
-            status = "401 Incorrect Secret Key"
+            properFormatting = False
+
+        if (properFormatting == True):
+            if webhook_message['secretKey'] == config.SECRET_KEY:
+        #make URL Request to get option chains for given security at current price
+                try:
+                    url = '{}markets/options/chains'.format(config.API_BASE_URL)
+                    optionHeaders = {
+                        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
+                        'Accept': 'application/json'
+                    }
+                    response = requests.get(url,
+                        params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
+                        headers= optionHeaders
+                    )
+        #receive option data
+                    json_response = response.json()
+                    if json_response['options'] != None: 
+                        contractList = []
+
+        #find At the Money(ATM) or closest In the Money(ITM) option contract
+                        tradeHelper.findATMContractForPurchase(json_response, webhook_message['stockPrice'], 'call', contractList)
+                        contractToPurchase = contractList[0]
+                        contractToPurchase.strikePrice = Decimal(contractToPurchase.strikePrice)
+        #'buy' contracts for every user listed in table and make appropriate calculations
+                        tradeHelper.insertContractsToTable(contractToPurchase)
+                        status = "200 OK"
+                    else:
+                        status = "400 Bad Request Company Symbol Not Found"
+                except requests.exceptions.RequestException as e:
+                    raise SystemExit(e)
+            else:
+                status = "401 Incorrect Secret Key"
+        else:
+            status = "400 Bad Request"
     else:
-        status = "400 Bad Request"
-  
+        status = '403 Request Must be Sent During Trading Hours'
     return {'Status': status}
 
-@app.route('/restTest')
-def restTest():
 
-    url = '{}markets/quotes'.format(config.API_BASE_URL)
-    headers = {
-        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
-        'Accept': 'application/json'
-    }
-    response = requests.get(url,
-        params={'symbols': 'AAPL'},
-        headers= headers
-    )
-    print(response)
-    json_response = response.json()
-    print(response.status_code)
-    print(json_response)
-    return {'Status': 'OK'}
+@app.route('/longCallSell', methods=['POST'])
+def optionSell():
+    status = None
+    webhook_message = app.current_request.json_body
+    if tradingHours() == True:
+        if ('symbol' in webhook_message and 'secretKey' in webhook_message):
+            properFormatting = True
+        else:
+            properFormatting = False
 
-def printUsers(Users):
-    for User in Users:
-        print(User['username'], " ",  User['last_name'])
+        if (properFormatting == True):
+            if webhook_message['secretKey'] == config.SECRET_KEY:
+        #make URL Request to get option chains for given security at current price
+                try:
+                    url = '{}markets/options/chains'.format(config.API_BASE_URL)
+                    optionHeaders = {
+                        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
+                        'Accept': 'application/json'
+                    }
+                    response = requests.get(url,
+                        params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
+                        headers= optionHeaders
+                    )
+        #receive option data
+                    json_response = response.json()
+                    if json_response['options'] != None: 
+                        
+                        contractSymbolList = []
+        #find At the Money(ATM) or closest In the Money(ITM) option contract
+                        FullOptionSymbolsList = tradeHelper.getSymbols(webhook_message['symbol'])
+                        if FullOptionSymbolsList != None:
+                            contractSymbolList.append(FullOptionSymbolsList[0]['contract_symbol'])
+        #Create List of existing contract symbols based on root symbol for sale 
+                            for option in FullOptionSymbolsList:
+                                optionSymbolInList = False
+                                for contractSymbol in contractSymbolList:
+                                    if contractSymbol == option['contract_symbol']:
+                                        optionSymbolInList = True
+                                if optionSymbolInList == False:
+                                    contractSymbolList.append(option['contract_symbol'])
 
+                            contractList = []
+
+                            for contractSymbol in contractSymbolList:
+                                tradeHelper.findATMContractToSell(json_response, contractSymbol, 'call', contractList)
+
+                            tradeHelper.updateAndDelete(contractList)
+
+                            status = "200 OK"
+                        else:
+                            status = "400 Bad Request None of those companies exist in the database"
+                    else:
+                        status = "400 Bad Request Company Symbol Not Found"
+                except requests.exceptions.RequestException as e:
+                    raise SystemExit(e)
+            else:
+                status = "401 Incorrect Secret Key"
+        else:
+            status = "400 Bad Request"
+    else:
+        status = '403 Request Must be Sent During Trading Hours'
+    return {'Status': status}
