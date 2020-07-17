@@ -58,7 +58,7 @@ class tradeHelper():
                         contract = Contract((value[i])['symbol'], (value[i])['bid'], (value[i])['ask'],(value[i])['strike'], (value[i])['expiration_date'])
                         listOfContracts.append(contract)
 
-##To Handle the case that the contracts to be purchase already exist in the database
+### A METHOD TO HANDLE THE CASE THAT YOU ARE PURCHASING A CONTRACT THAT ALREADY EXISTS IN THE DATABASE
     @staticmethod
     def getDuplicateContracts(user, contract):
         dynamodb = boto3.resource('dynamodb')
@@ -123,7 +123,8 @@ class tradeHelper():
                         'NumberOfContracts' : (amountOfContractsToPurchase + numOfDuplicateContracts) 
                     }
                 )
-    
+### A METHOD THAT DOES THE HEAVY LIFTING DURING CONTRACTS SELLS
+### CALCULATES PROFITABILITY, UPDATES USER TABLE, AND REMOVES CONTRACTS FROM CONTRACT TABLE
     @staticmethod
     def updateAndDelete(contractList):
         for contract in contractList:
@@ -134,6 +135,7 @@ class tradeHelper():
                 tradeHelper.updateAccountBalance(contract, cTuple, users)
                 tradeHelper.deleteContract(cTuple)
 
+### A METHOD TO CALCULATE PROFITABILITY AND UPDATE USER ACCOUNT BALANCE
     @staticmethod
     def updateAccountBalance(contract, cTuple, users):
         currPremium = contract.premiumPrice()
@@ -147,7 +149,7 @@ class tradeHelper():
             if user['username'] == cTuple['username']:
                 try:
                     availableAccountBalance = Decimal(user['AvailableAccountBalance'])
-                    updatedAvailableAccountBalance = (availableAccountBalance + totalRefund + profitOrLoss)
+                    updatedAvailableAccountBalance = (availableAccountBalance + totalRefund)
                     fullAccountBalance = Decimal(user['FullAccountBalance'])
                     updatedFullAccountBalance = (fullAccountBalance + profitOrLoss)
                     table.update_item(
@@ -166,6 +168,7 @@ class tradeHelper():
                     print(e)
                     raise SystemExit(e)
 
+### A METHOD TO DELETE THE GIVEN TUPLE FROM THE CONTRACT TABLE
     @staticmethod
     def deleteContract(cTuple):
         dynamodb = boto3.resource('dynamodb')
@@ -182,7 +185,7 @@ class tradeHelper():
             print(e)
             raise SystemExit(e)
 
-
+### A METHOD TO UPDATE USER ACCOUNT BALANCE DURING CONTRACT PURCHASE
     @staticmethod
     def reduceAvailableAccountBalance(user, amount):
         dynamodb = boto3.resource('dynamodb')
@@ -208,25 +211,7 @@ class tradeHelper():
             print(e)
             raise SystemExit(e)
 
-    @staticmethod
-    def getAvailableAccountBalance(user):
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('PaperTraderUserTable')
-        availableAccountBalance = -1
-        try:
-            response = table.get_item(
-                Key={
-                    'username': user['username'],
-                    'last_name': user['last_name']
-                }
-            )
-            userAccount = response['Item']
-            availableAccountBalance = userAccount['AvailableAccountBalance']
-        except Exception as e:
-            print('Available Account Balance Could not be Fetched')
-            raise SystemExit(e)
-        return availableAccountBalance
-
+### A METHOD TO RETURN THE LIST OF USERS AND THEIR ATTRIBUTES FROM USER TABLE
     @staticmethod
     def getUsers():
         dynamodb = boto3.resource('dynamodb')
@@ -247,33 +232,15 @@ class tradeHelper():
             done = start_key is None
         return users
 
-
+### A METHOD TO FIND AND RETURN A LIST OF ALL CONTRACTS FROM THE CONTRACT TABLE OF THE PASSED COMPANY'S TICKER SYMBOL
+### PASS IN 'AAPL' AND ALL APPLE CONTRACTS FROM THE CONTRACT TABLE WILL BE RETURNED
+### USED DURING SELL OPERATION
     @staticmethod
-    def getSymbols(root_symbol):
+    def getContracts(symbol):
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('PaperTraderContractTable')
         scan_args = {
-            'FilterExpression' : Key('contract_symbol').begins_with(root_symbol),
-            'ProjectionExpression': "username, contract_symbol"
-        }
-        contracts = None
-        done = False
-        start_key = None
-        while not done:
-            if start_key:
-                scan_kwargs['ExclusiveStartKey'] = start_key
-            response = table.scan(**scan_args)
-            contracts = response.get('Items')
-            start_key = response.get('LastEvaluatedKey', None)
-            done = start_key is None
-        return contracts
-    
-    @staticmethod
-    def getContracts(contractSymbol):
-        dynamodb = boto3.resource('dynamodb')
-        table = dynamodb.Table('PaperTraderContractTable')
-        scan_args = {
-            'FilterExpression' : Key('contract_symbol').eq(contractSymbol),
+            'FilterExpression' : Key('contract_symbol').begins_with(symbol),
             'ProjectionExpression': "username, contract_symbol, AveragePremiumPrice, NumberOfContracts"
         }
         contracts = None
@@ -288,4 +255,45 @@ class tradeHelper():
             done = start_key is None
         return contracts
 
+### TAKES A FULL LIST OF CONTRACT TUPLES, ELIMINATES REDUNDANCIES AND OTHER UNUSABLE ATTRIBUTES
+### REDUCED CONTRACT LIST WILL NOW BE A SMALLER LIST CONTAINING ONLY NON REDUNDANT CONTRACT SYMBOLS
+    @staticmethod
+    def reduceContractList(fullContractTupleList, reducedContractTupleList):
+        for option in fullContractTupleList:
+            optionSymbolInList = False
+            for contractSymbol in reducedContractTupleList:
+                if contractSymbol == option['contract_symbol']:
+                    optionSymbolInList = True
+                if optionSymbolInList == False:
+                    reducedContractTupleList.append(option['contract_symbol'])
 
+### THESE METHODS CHECK FOR PROPER JSON FORMATTING AND THE CORRECT SECRET KEY
+    @staticmethod
+    def checkStatusFormatAndAuthenticationBuy(webhook_message, status):
+        statusOk = False
+        status = None
+        if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
+            properFormatting = True
+        if (properFormatting == True):
+            if webhook_message['secretKey'] == config.SECRET_KEY:
+                statusOk = True
+            else:
+                status = "401 Incorrect Secret Key"
+        else:
+            status = "400 Bad Request"
+        return statusOk
+
+    @staticmethod
+    def checkStatusFormatAndAuthenticationSell(webhook_message, status):
+        statusOk = False
+        status = None
+        if ('symbol' in webhook_message and 'secretKey' in webhook_message):
+            properFormatting = True
+        if (properFormatting == True):
+            if webhook_message['secretKey'] == config.SECRET_KEY:
+                statusOk = True
+            else:
+                status = "401 Incorrect Secret Key"
+        else:
+            status = "400 Bad Request"
+        return statusOk

@@ -10,7 +10,8 @@ from tradeHelper import tradeHelper
 from decimal import Decimal
 from pytz import timezone
 
-def tradingHours():
+### A METHOD TO CHECK IF THE MARKET IS OPEN
+def tradingHours(status):
     est = timezone('US/Eastern')
     timeUnformatted = datetime.now(est)
     timeFormatted = timeUnformatted.strftime("%H:%M:%S")
@@ -18,11 +19,12 @@ def tradingHours():
     if(timeFormatted >= '09:00:00' and timeFormatted <= '16:29:58'):
         return True
     else:
+        status = '403 Request Must be Sent During Trading Hours'
         return False
 
 app = Chalice(app_name='PaperTrader')
 
-### CREATE A TABLE TO STORE USERS
+### A ROUTE METHOD TO CREATE A TABLE TO STORE USERS
 @app.route('/initUserTable')
 def CreatePaperTraderUserTable():
     dynamodb = boto3.resource('dynamodb')
@@ -59,7 +61,7 @@ def CreatePaperTraderUserTable():
     table.meta.client.get_waiter('table_exists').wait(TableName='PaperTraderUserTable')
     return {'Status': 'OK'}
 
-###CREATE A TABLE TO STORE OPTION CONTRACTS
+### A ROUTE METHOD TO CREATE A TABLE TO STORE OPTION CONTRACTS
 @app.route('/initContractTable')
 def CreatePaperTraderUserTable():
     dynamodb = boto3.resource('dynamodb')
@@ -127,47 +129,36 @@ def CreatePaperTraderUser(username,last_name, account_balance):
 def optionBuy():
     status = None
     webhook_message = app.current_request.json_body
-    if tradingHours() == True:
-        if ('stockPrice' in webhook_message and 'symbol' in webhook_message and 'secretKey' in webhook_message):
-            properFormatting = True
-        else:
-            properFormatting = False
+    if tradingHours(status) == True:
+        statusOk = tradeHelper.checkStatusFormatAndAuthenticationBuy(webhook_message, status)
+        if  statusOk == True:
+    #make URL Request to get option chains for given security at current price
+            try:
+                url = '{}markets/options/chains'.format(config.API_BASE_URL)
+                optionHeaders = {
+                    'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
+                    'Accept': 'application/json'
+                }
+                response = requests.get(url,
+                    params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
+                    headers= optionHeaders
+                )
+    #receive option data
+                json_response = response.json()
+                if json_response['options'] != None: 
+                    contractList = []
 
-        if (properFormatting == True):
-            if webhook_message['secretKey'] == config.SECRET_KEY:
-        #make URL Request to get option chains for given security at current price
-                try:
-                    url = '{}markets/options/chains'.format(config.API_BASE_URL)
-                    optionHeaders = {
-                        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
-                        'Accept': 'application/json'
-                    }
-                    response = requests.get(url,
-                        params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
-                        headers= optionHeaders
-                    )
-        #receive option data
-                    json_response = response.json()
-                    if json_response['options'] != None: 
-                        contractList = []
-
-        #find At the Money(ATM) or closest In the Money(ITM) option contract
-                        tradeHelper.findATMContractForPurchase(json_response, webhook_message['stockPrice'], 'call', contractList)
-                        contractToPurchase = contractList[0]
-                        contractToPurchase.strikePrice = Decimal(contractToPurchase.strikePrice)
-        #'buy' contracts for every user listed in table and make appropriate calculations
-                        tradeHelper.insertContractsToTable(contractToPurchase)
-                        status = "200 OK"
-                    else:
-                        status = "400 Bad Request Company Symbol Not Found"
-                except requests.exceptions.RequestException as e:
-                    raise SystemExit(e)
-            else:
-                status = "401 Incorrect Secret Key"
-        else:
-            status = "400 Bad Request"
-    else:
-        status = '403 Request Must be Sent During Trading Hours'
+    #find At the Money(ATM) or closest In the Money(ITM) option contract
+                    tradeHelper.findATMContractForPurchase(json_response, webhook_message['stockPrice'], 'call', contractList)
+                    contractToPurchase = contractList[0]
+                    contractToPurchase.strikePrice = Decimal(contractToPurchase.strikePrice)
+    #'buy' contracts for every user listed in table and make appropriate calculations
+                    tradeHelper.insertContractsToTable(contractToPurchase)
+                    status = "200 OK"
+                else:
+                    status = "400 Bad Request Company Symbol Not Found"
+            except requests.exceptions.RequestException as e:
+                raise SystemExit(e)
     return {'Status': status}
 
 
@@ -175,61 +166,46 @@ def optionBuy():
 def optionSell():
     status = None
     webhook_message = app.current_request.json_body
-    if tradingHours() == True:
-        if ('symbol' in webhook_message and 'secretKey' in webhook_message):
-            properFormatting = True
-        else:
-            properFormatting = False
-
-        if (properFormatting == True):
-            if webhook_message['secretKey'] == config.SECRET_KEY:
+    if tradingHours(status) == True:
+        statusOk = tradeHelper.checkStatusFormatAndAuthenticationSell(webhook_message, status)
+        if  statusOk == True:
         #make URL Request to get option chains for given security at current price
-                try:
-                    url = '{}markets/options/chains'.format(config.API_BASE_URL)
-                    optionHeaders = {
-                        'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
-                        'Accept': 'application/json'
-                    }
-                    response = requests.get(url,
-                        params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
-                        headers= optionHeaders
-                    )
-        #receive option data
-                    json_response = response.json()
-                    if json_response['options'] != None: 
+            try:
+                url = '{}markets/options/chains'.format(config.API_BASE_URL)
+                optionHeaders = {
+                    'Authorization': 'Bearer {}'.format(config.ACCESS_TOKEN),
+                    'Accept': 'application/json'
+                }
+                response = requests.get(url,
+                    params={'symbol': webhook_message['symbol'], 'expiration': tradeHelper.getClosestFriday()},
+                    headers= optionHeaders
+                )
+    #receive option data
+                json_response = response.json()
+                if json_response['options'] != None: 
+                    
+                    reducedContractTupleList = []
+    #Find all the contracts in contract table that are of the passed in company ticker symbol
+                    fullContractTupleList = tradeHelper.getContracts(webhook_message['symbol'])
+                    if fullContractTupleList != None:
+                    
+                        reducedContractTupleList.append(fullContractTupleList[0]['contract_symbol']) 
+    #Take the full list of contract tuples and reduce them to only the contract symbols
+    #So we can more easily find the corresponding contracts in our json_response
+                        tradeHelper.reduceContractList(fullContractTupleList, reducedContractTupleList)
                         
-                        contractSymbolList = []
-        #find At the Money(ATM) or closest In the Money(ITM) option contract
-                        FullOptionSymbolsList = tradeHelper.getSymbols(webhook_message['symbol'])
-                        if FullOptionSymbolsList != None:
-                            contractSymbolList.append(FullOptionSymbolsList[0]['contract_symbol'])
-        #Create List of existing contract symbols based on root symbol for sale 
-                            for option in FullOptionSymbolsList:
-                                optionSymbolInList = False
-                                for contractSymbol in contractSymbolList:
-                                    if contractSymbol == option['contract_symbol']:
-                                        optionSymbolInList = True
-                                if optionSymbolInList == False:
-                                    contractSymbolList.append(option['contract_symbol'])
+                        contractList = []
 
-                            contractList = []
+                        for contractSymbol in reducedContractTupleList:
+                            tradeHelper.findATMContractToSell(json_response, contractSymbol, 'call', contractList)
 
-                            for contractSymbol in contractSymbolList:
-                                tradeHelper.findATMContractToSell(json_response, contractSymbol, 'call', contractList)
+                        tradeHelper.updateAndDelete(contractList)
 
-                            tradeHelper.updateAndDelete(contractList)
-
-                            status = "200 OK"
-                        else:
-                            status = "400 Bad Request None of those companies exist in the database"
+                        status = "200 OK"
                     else:
-                        status = "400 Bad Request Company Symbol Not Found"
-                except requests.exceptions.RequestException as e:
-                    raise SystemExit(e)
-            else:
-                status = "401 Incorrect Secret Key"
-        else:
-            status = "400 Bad Request"
-    else:
-        status = '403 Request Must be Sent During Trading Hours'
+                        status = "400 Bad Request None of those companies exist in the database"
+                else:
+                    status = "400 Bad Request Company Symbol Not Found"
+            except requests.exceptions.RequestException as e:
+                raise SystemExit(e)
     return {'Status': status}
